@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Flappy Seal 🦭</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #020d1a;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    overflow: hidden;
+    font-family: 'Courier New', monospace;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  #gameCanvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    flex-shrink: 0;
+  }
+
+  /* ── CONTROL BAR (mobile only, below canvas) ── */
+  #controlBar {
+    display: none;
+    width: 100%;
+    max-width: 520px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px 6px 12px;
+    gap: 0;
+    flex-shrink: 0;
+  }
+
+  /* Each D-pad is a 3×3 grid */
+  .dpad {
+    display: grid;
+    grid-template-columns: repeat(3, 52px);
+    grid-template-rows: repeat(3, 52px);
+    gap: 4px;
+  }
+
+  .dpad-btn {
+    width: 52px;
+    height: 52px;
+    background: rgba(8, 45, 70, 0.82);
+    border: 1.5px solid rgba(80, 200, 255, 0.35);
+    border-radius: 10px;
+    color: rgba(140, 220, 255, 0.9);
+    font-size: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.07s, transform 0.07s;
+    backdrop-filter: blur(3px);
+  }
+  .dpad-btn:active,
+  .dpad-btn.pressed {
+    background: rgba(20, 110, 170, 0.92);
+    transform: scale(0.90);
+    border-color: rgba(100, 220, 255, 0.85);
+    color: #fff;
+  }
+  /* empty cells in D-pad grid */
+  .dpad-empty {
+    width: 52px;
+    height: 52px;
+  }
+
+  /* ── BOOST (center between the two pads) ── */
+  #boostWrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 0 8px;
+  }
+  #boostBtn {
+    width: 60px;
+    height: 60px;
+    background: rgba(60, 20, 100, 0.82);
+    border: 2px solid rgba(180, 100, 255, 0.5);
+    border-radius: 50%;
+    color: rgba(210, 170, 255, 0.95);
+    font-size: 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    backdrop-filter: blur(3px);
+    transition: background 0.07s, transform 0.07s;
+  }
+  #boostBtn span.blabel {
+    font-size: 8px;
+    font-family: 'Courier New', monospace;
+    color: rgba(200,160,255,0.75);
+    letter-spacing: 1px;
+    margin-top: -2px;
+  }
+  #boostBtn:active,
+  #boostBtn.pressed {
+    background: rgba(120, 50, 200, 0.95);
+    transform: scale(0.90);
+    border-color: rgba(210, 140, 255, 0.9);
+  }
+</style>
+</head>
+<body>
+
+<canvas id="gameCanvas"></canvas>
+
+<!-- Control bar — shown only on mobile -->
+<div id="controlBar">
+
+  <!-- LEFT D-PAD -->
+  <div class="dpad" id="dpadLeft">
+    <div class="dpad-empty"></div>
+    <button class="dpad-btn" data-key="w" data-pad="L">▲</button>
+    <div class="dpad-empty"></div>
+    <button class="dpad-btn" data-key="a" data-pad="L">◀</button>
+    <div class="dpad-empty"></div>
+    <button class="dpad-btn" data-key="d" data-pad="L">▶</button>
+    <div class="dpad-empty"></div>
+    <button class="dpad-btn" data-key="s" data-pad="L">▼</button>
+    <div class="dpad-empty"></div>
+  </div>
+
+  <!-- BOOST CENTER -->
+  <div id="boostWrap">
+    <button id="boostBtn"><span>⚡</span><span class="blabel">BOOST</span></button>
+  </div>
+
+  <!-- RIGHT D-PAD -->
+  <div class="dpad" id="dpadRight">
+    <div class="dpad-empty"></div>
+    <button class="dpad-btn" data-key="w" data-pad="R">▲</button>
+    <div class="dpad-empty"></div>
+    <button class="dpad-btn" data-key="a" data-pad="R">◀</button>
+    <div class="dpad-empty"></div>
+    <button class="dpad-btn" data-key="d" data-pad="R">▶</button>
+    <div class="dpad-empty"></div>
+    <button class="dpad-btn" data-key="s" data-pad="R">▼</button>
+    <div class="dpad-empty"></div>
+  </div>
+
+</div><!-- end controlBar -->
+
+<script>
+// ═══════════════════════════════════════════════════════════
+//  CANVAS SETUP
+// ═══════════════════════════════════════════════════════════
+const canvas = document.getElementById('gameCanvas');
+const ctx    = canvas.getContext('2d');
+const BASE_W = 480, BASE_H = 720;
+
+const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+               || ('ontouchstart' in window)
+               || navigator.maxTouchPoints > 0;
+
+const controlBar = document.getElementById('controlBar');
+
+function resize() {
+  if (isMobile) {
+    controlBar.style.display = 'flex';
+    // Canvas gets remaining vertical space above the control bar
+    const barH  = controlBar.offsetHeight || 180;
+    const availH = window.innerHeight - barH - 8;
+    const availW = window.innerWidth;
+    const s = Math.min(availW / BASE_W, availH / BASE_H);
+    canvas.style.width  = Math.floor(BASE_W * s) + 'px';
+    canvas.style.height = Math.floor(BASE_H * s) + 'px';
+    controlBar.style.maxWidth = Math.max(Math.floor(BASE_W * s), 360) + 'px';
+  } else {
+    controlBar.style.display = 'none';
+    const s = Math.min(window.innerWidth / BASE_W, window.innerHeight / BASE_H);
+    canvas.style.width  = Math.floor(BASE_W * s) + 'px';
+    canvas.style.height = Math.floor(BASE_H * s) + 'px';
+  }
+}
+canvas.width  = BASE_W;
+canvas.height = BASE_H;
+resize();
+// Wait for controlBar to render, then resize once more
+setTimeout(resize, 50);
+window.addEventListener('resize', resize);
+
+// ═══════════════════════════════════════════════════════════
+//  PALETTE
+// ═══════════════════════════════════════════════════════════
+const PAL = {
+  aqua:       '#1eb8d0', lightAqua: '#5dd4e8',
+  white:      '#f0faff',
+  sealGray:   '#b0b8c0', sealDark:  '#707880',
+  otterBrown: '#8B5E3C', otterDark: '#5C3D20', otterLight: '#C4915A',
+  fishGold:   '#FFD700', fishOrange:'#FF8C00',
+  red:        '#ff4455', green:     '#44ff88',
+  yellow:     '#ffe044', purple:    '#8855ff',
+};
+
+// ═══════════════════════════════════════════════════════════
+//  GAME STATE
+// ═══════════════════════════════════════════════════════════
+const STATE = { START:0, PLAY:1, DEAD:2 };
+let state      = STATE.START;
+let score      = 0, bestScore = 0;
+let gameTime   = 0, frameCount = 0, lastTime = 0;
+
+let currentSpeed  = 1.8,  otterSpeed    = 2.2,  spawnInterval = 180;
+const MAX_CURRENT = 5.5,  MAX_OTTER_SPD = 6.5;
+
+// ═══════════════════════════════════════════════════════════
+//  INPUT
+// ═══════════════════════════════════════════════════════════
+const keys = { w:false, a:false, s:false, d:false };
+let boostActive = false;
+
+// -- Keyboard --
+window.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k==='arrowup'   || k==='w') keys.w = true;
+  if (k==='arrowdown' || k==='s') keys.s = true;
+  if (k==='arrowleft' || k==='a') keys.a = true;
+  if (k==='arrowright'|| k==='d') keys.d = true;
+  if (k===' ') boostActive = true;
+  if (state===STATE.START) startGame();
+  if (state===STATE.DEAD && k==='r') restartGame();
+  e.preventDefault();
+});
+window.addEventListener('keyup', e => {
+  const k = e.key.toLowerCase();
+  if (k==='arrowup'   || k==='w') keys.w = false;
+  if (k==='arrowdown' || k==='s') keys.s = false;
+  if (k==='arrowleft' || k==='a') keys.a = false;
+  if (k==='arrowright'|| k==='d') keys.d = false;
+  if (k===' ') boostActive = false;
+});
+
+// -- D-pad buttons (works for BOTH pads since same keys) --
+function bindDpad(container) {
+  const btns = container.querySelectorAll('.dpad-btn');
+  btns.forEach(btn => {
+    const key = btn.dataset.key;
+    const down = e => {
+      e.preventDefault();
+      keys[key] = true;
+      btn.classList.add('pressed');
+      initAudio();
+      if (state===STATE.START) startGame();
+    };
+    const up = e => {
+      e.preventDefault();
+      keys[key] = false;
+      btn.classList.remove('pressed');
+    };
+    btn.addEventListener('touchstart',  down, { passive:false });
+    btn.addEventListener('touchend',    up,   { passive:false });
+    btn.addEventListener('touchcancel', up,   { passive:false });
+    btn.addEventListener('mousedown',   down);
+    btn.addEventListener('mouseup',     up);
+    btn.addEventListener('mouseleave',  up);
+  });
+}
+bindDpad(document.getElementById('dpadLeft'));
+bindDpad(document.getElementById('dpadRight'));
+
+// -- Boost button --
+const boostBtn = document.getElementById('boostBtn');
+const boostDown = e => {
+  e.preventDefault();
+  boostActive = true;
+  boostBtn.classList.add('pressed');
+  initAudio();
+  if (state===STATE.START) startGame();
+};
+const boostUp = e => {
+  e.preventDefault();
+  boostActive = false;
+  boostBtn.classList.remove('pressed');
+};
+boostBtn.addEventListener('touchstart',  boostDown, { passive:false });
+boostBtn.addEventListener('touchend',    boostUp,   { passive:false });
+boostBtn.addEventListener('touchcancel', boostUp,   { passive:false });
+boostBtn.addEventListener('mousedown',   boostDown);
+boostBtn.addEventListener('mouseup',     boostUp);
+
+// -- Canvas tap (mobile: boost; any state: advance) --
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  initAudio();
+  if (state===STATE.START) { startGame(); return; }
+  if (state===STATE.DEAD)  { restartGame(); return; }
+  boostActive = true;
+}, { passive:false });
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  boostActive = false;
+}, { passive:false });
+
+// ═══════════════════════════════════════════════════════════
+//  SEAL
+// ═══════════════════════════════════════════════════════════
+const seal = {
+  x:BASE_W/2, y:BASE_H/2, vx:0, vy:0,
+  frame:0, frameTimer:0,
+  invincible:false, invTimer:0, invDuration:300,
+  dead:false, deathTimer:0,
+  totalDist:0, prevX:BASE_W/2, prevY:BASE_H/2,
+  boostCooldown:0,
+};
+
+// ═══════════════════════════════════════════════════════════
+//  WORLD OBJECTS
+// ═══════════════════════════════════════════════════════════
+let otters=[], spawnTimer=90;
+let fish=null, fishTimer=0;
+const FISH_SPAWN_FRAMES = 1800;
+let particles=[], bubbles=[], currentLines=[], bgElements=[], stars=[];
+
+// ═══════════════════════════════════════════════════════════
+//  BACKGROUND INIT
+// ═══════════════════════════════════════════════════════════
+function initBG() {
+  bgElements=[];
+  for (let i=0;i<12;i++) bgElements.push({
+    x:Math.random()*BASE_W, y:Math.random()*BASE_H,
+    type:Math.random()<0.5?'coral':'kelp',
+    size:20+Math.random()*40, speed:0.3+Math.random()*0.4,
+    color:Math.random()<0.5?'#1a3a5c':'#142d4a',
+  });
+  stars=[];
+  for (let i=0;i<60;i++) stars.push({
+    x:Math.random()*BASE_W, y:Math.random()*BASE_H,
+    r:0.5+Math.random()*1.5, speed:0.2+Math.random()*0.5,
+    alpha:0.2+Math.random()*0.5,
+  });
+  currentLines=[];
+  for (let i=0;i<20;i++) spawnCurrentLine();
+}
+function spawnCurrentLine() {
+  currentLines.push({
+    x:Math.random()*BASE_W, y:-20,
+    len:20+Math.random()*60,
+    speed:currentSpeed*(0.8+Math.random()*0.8),
+    alpha:0.08+Math.random()*0.18,
+    w:0.5+Math.random()*1.5,
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SPAWN OTTER PAIR
+// ═══════════════════════════════════════════════════════════
+function spawnOtterPair() {
+  const gapSize = Math.max(120, 160 - Math.floor(gameTime/20));
+  const gapX    = 80 + Math.random()*(BASE_W-160);
+  const W=80, H=110;
+  const base = { w:W,h:H,speed:otterSpeed,gapX,jawOpen:0,jawTimer:0,pawPhase:0,headAngle:0,id:frameCount };
+  otters.push({ ...base, side:'left',  x: gapX-gapSize/2-W*0.6, y:-H });
+  otters.push({ ...base, side:'right', x: gapX+gapSize/2-W*0.4, y:-H });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  DRAW HELPERS
+// ═══════════════════════════════════════════════════════════
+function rr(x,y,w,h,r,c) {
+  ctx.fillStyle=c; ctx.beginPath(); ctx.roundRect(x,y,w,h,r); ctx.fill();
+}
+function pr(x,y,w,h,c) {
+  ctx.fillStyle=c; ctx.fillRect(Math.floor(x),Math.floor(y),w,h);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  DRAW SEAL
+// ═══════════════════════════════════════════════════════════
+function drawSeal(x,y,frame,inv,dead) {
+  ctx.save();
+  ctx.translate(Math.floor(x), Math.floor(y));
+  if (inv) { ctx.shadowColor=PAL.lightAqua; ctx.shadowBlur=15+Math.sin(frameCount*0.3)*5+5; }
+  if (dead) ctx.rotate(Math.min(seal.deathTimer*0.05, Math.PI*0.6));
+
+  const bc = inv ? PAL.lightAqua : PAL.sealGray;
+  const bd = inv ? PAL.aqua      : PAL.sealDark;
+
+  pr(-22,-10,40,20,bc); pr(-18,-14,32,28,bc); pr(-14,-16,24,32,bc);
+  pr(-12,-8, 20,16, inv?'#8af':'#d0d8e0');
+  pr(-22,-4,6,8,bd); pr(14,-4,8,8,bd);
+  pr(12,-16,18,18,bc); pr(10,-14,20,16,bc); pr(16,-18,12,8,bc);
+  pr(24,-14,6,6,'#1a1a2e'); pr(25,-13,3,3,'#000'); pr(26,-14,2,2,'#fff');
+  pr(28,-10,4,3,'#8a6a6a');
+  ctx.strokeStyle=inv?'#aef':'#888'; ctx.lineWidth=1;
+  for (let i=0;i<3;i++) {
+    ctx.beginPath(); ctx.moveTo(28,-8+i*2); ctx.lineTo(38,-10+i*3); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(28,-8+i*2); ctx.lineTo(38,-6+i);    ctx.stroke();
+  }
+  const flip=Math.sin(frameCount*0.15+frame)*6;
+  pr(-26,-6+flip*0.3,10,14,bd); pr(-28,-2+flip*0.3,8,10,bc);
+  const ff=Math.sin(frameCount*0.18)*5;
+  pr(6,8+ff,12,8,bd); pr(4,6+ff,14,8,bc);
+  if (keys.w) { pr(4,-20,8,10,bd); pr(6,-24,6,8,bc); }
+
+  // Boost afterburn
+  if (seal.boostCooldown>100) {
+    const bc2=( seal.boostCooldown-100)/20;
+    ctx.strokeStyle=`rgba(180,100,255,${bc2*0.9})`; ctx.lineWidth=2+bc2*2;
+    for (let i=0;i<3;i++) {
+      ctx.beginPath(); ctx.moveTo(-22-i*10,-4+i*4); ctx.lineTo(-40-i*10,-4+i*4); ctx.stroke();
+    }
+  }
+  if (inv) {
+    ctx.strokeStyle='rgba(100,220,255,0.6)'; ctx.lineWidth=2;
+    for (let i=0;i<4;i++) {
+      ctx.beginPath(); ctx.moveTo(-30-i*10,-8+i*4); ctx.lineTo(-50-i*10,-8+i*4); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  DRAW OTTER
+// ═══════════════════════════════════════════════════════════
+function drawOtter(o) {
+  const cx=Math.floor(o.x+o.w/2), cy=Math.floor(o.y+o.h/2);
+  ctx.save();
+  ctx.translate(cx,cy);
+  ctx.rotate(o.side==='left'? Math.PI*0.22 : -Math.PI*0.22);
+
+  pr(-o.w/2,   -o.h/2,    o.w,      o.h*0.7,    PAL.otterBrown);
+  pr(-o.w/2+4, -o.h/2+4,  o.w-8,    o.h*0.7-8,  PAL.otterLight);
+  pr(-o.w/2+10,-o.h/2+16, o.w-20,   o.h*0.5-10, '#e8c49a');
+
+  const p1=Math.sin(o.pawPhase)*8, p2=Math.sin(o.pawPhase+Math.PI)*8;
+  pr(-o.w/2-4, o.h*0.1+p1, 16,10, PAL.otterDark);
+  pr( o.w/2-12,o.h*0.1+p2, 16,10, PAL.otterDark);
+  for (let c=0;c<3;c++) {
+    pr(-o.w/2-4+c*4, o.h*0.1+p1+10,4,5,'#3a2010');
+    pr( o.w/2-12+c*4,o.h*0.1+p2+10,4,5,'#3a2010');
+  }
+
+  ctx.save();
+  ctx.rotate(o.headAngle);
+  pr(-o.w/2+6,  -o.h/2-18, o.w-12,28, PAL.otterBrown);
+  pr(-o.w/2+10, -o.h/2-14, o.w-20,22, PAL.otterLight);
+  pr(-o.w/2+4,  -o.h/2-26, 12,12, PAL.otterDark);
+  pr( o.w/2-16, -o.h/2-26, 12,12, PAL.otterDark);
+  pr(-o.w/2+6,  -o.h/2-24,  8, 8, '#c47840');
+  pr( o.w/2-14, -o.h/2-24,  8, 8, '#c47840');
+
+  const ey=-o.h/2-8;
+  ctx.fillStyle=PAL.otterDark;
+  ctx.beginPath(); ctx.moveTo(-o.w/2+12,ey-8); ctx.lineTo(-o.w/2+18,ey-4); ctx.lineTo(-o.w/2+8,ey-4);  ctx.fill();
+  ctx.beginPath(); ctx.moveTo( o.w/2-12,ey-8); ctx.lineTo( o.w/2-18,ey-4); ctx.lineTo( o.w/2-8,ey-4);  ctx.fill();
+  pr(-o.w/2+10,ey-4,10,8,'#1a0a00'); pr(o.w/2-20,ey-4,10,8,'#1a0a00');
+  pr(-o.w/2+11,ey-3, 5,4,'#ff2200'); pr(o.w/2-19,ey-3, 5,4,'#ff2200');
+  pr(-o.w/2+12,ey-4, 2,2,'#fff');    pr(o.w/2-18,ey-4, 2,2,'#fff');
+
+  const jm=o.jawOpen*10;
+  pr(-o.w/2+10,-o.h/2+2,   o.w-20,10,PAL.otterDark);
+  pr(-o.w/2+10,-o.h/2+10+jm,o.w-20,10,PAL.otterDark);
+  if (o.jawOpen>0.3) {
+    for (let t=0;t<4;t++) {
+      pr(-o.w/2+12+t*8,-o.h/2+10,   5,4,'#f8f8e8');
+      pr(-o.w/2+12+t*8,-o.h/2+11+jm,5,4,'#f8f8e8');
+    }
+    pr(-o.w/2+12,-o.h/2+11,o.w-24,jm-1,'#d04060');
+    if (o.jawOpen>0.6) pr(-o.w/2+18,-o.h/2+10+jm-4,12,6,'#e05070');
+  }
+  pr(-o.w/2+o.w/2-5,-o.h/2+2,10,6,'#5a3020');
+  ctx.restore();
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  DRAW FISH
+// ═══════════════════════════════════════════════════════════
+function drawFish(f) {
+  const bob=Math.sin(frameCount*0.08)*3, glow=Math.sin(frameCount*0.15)*0.5+0.5;
+  ctx.save();
+  ctx.translate(Math.floor(f.x), Math.floor(f.y)+bob);
+  ctx.shadowColor=PAL.fishGold; ctx.shadowBlur=8+glow*12;
+  pr(-14,-6,24,12,PAL.fishOrange); pr(-10,-8,16,16,PAL.fishGold); pr(-6,-10,10,20,PAL.fishOrange);
+  ctx.fillStyle=PAL.fishOrange;
+  ctx.beginPath(); ctx.moveTo(-14,0); ctx.lineTo(-26,-8); ctx.lineTo(-26,8); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle='rgba(255,180,0,0.5)'; ctx.lineWidth=1;
+  for (let s=0;s<3;s++) { ctx.beginPath(); ctx.arc(-4+s*5,0,4,0,Math.PI); ctx.stroke(); }
+  pr(6,-4,5,5,'#1a1a00'); pr(7,-3,2,2,'#fff');
+  for (let p=0;p<4;p++) {
+    const a=(frameCount*0.05+p*Math.PI/2)%(Math.PI*2);
+    ctx.fillStyle=`rgba(255,220,50,${0.4+glow*0.4})`;
+    ctx.fillRect(Math.cos(a)*(16+glow*4)-1, Math.sin(a)*(12+glow*4)-1,3,3);
+  }
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  BACKGROUND
+// ═══════════════════════════════════════════════════════════
+function drawBackground() {
+  const sr=Math.min((otterSpeed-2.2)/(MAX_OTTER_SPD-2.2),1);
+  const g=ctx.createLinearGradient(0,0,0,BASE_H);
+  g.addColorStop(0,  lerp('#0a1628','#000510',sr));
+  g.addColorStop(0.5,lerp('#112238','#040e20',sr));
+  g.addColorStop(1,  lerp('#0d2444','#020c1e',sr));
+  ctx.fillStyle=g; ctx.fillRect(0,0,BASE_W,BASE_H);
+
+  if (sr>0.3) {
+    const sh=ctx.createRadialGradient(BASE_W/2,BASE_H/2,0,BASE_W/2,BASE_H/2,BASE_W*0.8);
+    sh.addColorStop(0,`rgba(0,80,120,${sr*0.15})`); sh.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=sh; ctx.fillRect(0,0,BASE_W,BASE_H);
+  }
+  for (const s of stars) {
+    s.y+=s.speed*(currentSpeed/2); if(s.y>BASE_H){s.y=-4;s.x=Math.random()*BASE_W;}
+    ctx.fillStyle=`rgba(100,200,255,${s.alpha+Math.sin(frameCount*0.02+s.x)*0.1})`;
+    ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2); ctx.fill();
+  }
+  for (const el of bgElements) {
+    el.y+=el.speed; if(el.y>BASE_H+80){el.y=-80;el.x=Math.random()*BASE_W;}
+    drawBGEl(el);
+  }
+  for (let i=currentLines.length-1;i>=0;i--) {
+    const cl=currentLines[i];
+    cl.y+=cl.speed; cl.speed=currentSpeed*(0.8+Math.random()*0.01);
+    if(cl.y>BASE_H+cl.len){currentLines.splice(i,1);spawnCurrentLine();continue;}
+    ctx.strokeStyle=`rgba(100,200,240,${cl.alpha+sr*0.1})`; ctx.lineWidth=cl.w;
+    ctx.beginPath(); ctx.moveTo(cl.x,cl.y); ctx.lineTo(cl.x+Math.sin(cl.y*0.01)*8,cl.y+cl.len); ctx.stroke();
+  }
+  if (sr>0.2) {
+    const pulse=Math.sin(frameCount*0.08)*0.3+0.7;
+    const v=ctx.createRadialGradient(BASE_W/2,BASE_H/2,BASE_H*0.25,BASE_W/2,BASE_H/2,BASE_H*0.75);
+    v.addColorStop(0,'rgba(0,0,0,0)');
+    v.addColorStop(1,`rgba(0,${Math.floor(20+sr*30)},${Math.floor(40+sr*60)},${sr*pulse*0.55})`);
+    ctx.fillStyle=v; ctx.fillRect(0,0,BASE_W,BASE_H);
+  }
+}
+function drawBGEl(el) {
+  ctx.save(); ctx.translate(el.x,el.y); ctx.fillStyle=el.color; ctx.globalAlpha=0.5;
+  if (el.type==='coral') {
+    for (let b=0;b<5;b++) {
+      const bx=(b-2)*8, bh=el.size*(0.4+Math.sin(b*1.3)*0.4);
+      ctx.fillRect(bx-3,-bh,6,bh); ctx.beginPath(); ctx.arc(bx,-bh,6,0,Math.PI*2); ctx.fill();
+    }
+  } else {
+    for (let k=0;k<3;k++) {
+      const kx=(k-1)*10, wv=Math.sin(frameCount*0.02+k+el.x)*6;
+      ctx.beginPath(); ctx.moveTo(kx,0);
+      ctx.bezierCurveTo(kx+wv,-el.size*0.3,kx-wv,-el.size*0.6,kx+wv*0.5,-el.size);
+      ctx.lineWidth=4; ctx.strokeStyle=el.color; ctx.stroke();
+    }
+  }
+  ctx.globalAlpha=1; ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  BUBBLES & PARTICLES
+// ═══════════════════════════════════════════════════════════
+function spawnBubble(x,y) {
+  for (let i=0;i<3;i++) bubbles.push({
+    x:x+(Math.random()-0.5)*20, y:y+(Math.random()-0.5)*10,
+    r:2+Math.random()*5, vy:-(0.5+Math.random()*1.5), vx:(Math.random()-0.5)*1,
+    life:60+Math.random()*60,
+  });
+}
+function updateBubbles() {
+  for (let i=bubbles.length-1;i>=0;i--) {
+    const b=bubbles[i];
+    b.x+=b.vx+Math.sin(frameCount*0.05+i)*0.3; b.y+=b.vy; b.life--;
+    if(b.life<=0||b.y<-20){bubbles.splice(i,1);continue;}
+    const a=Math.min(b.life/30,1)*0.6;
+    ctx.strokeStyle=`rgba(150,230,255,${a})`; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle=`rgba(200,240,255,${a*0.6})`;
+    ctx.beginPath(); ctx.arc(b.x-b.r*0.3,b.y-b.r*0.3,b.r*0.3,0,Math.PI*2); ctx.fill();
+  }
+}
+function spawnParticles(x,y,color,n=8) {
+  for (let i=0;i<n;i++) {
+    const a=(Math.PI*2*i)/n+Math.random()*0.5, sp=2+Math.random()*4;
+    particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:40+Math.random()*30,color,size:2+Math.random()*4});
+  }
+}
+function updateParticles() {
+  for (let i=particles.length-1;i>=0;i--) {
+    const p=particles[i];
+    p.x+=p.vx; p.vx*=0.95; p.y+=p.vy; p.vy*=0.95; p.life--;
+    if(p.life<=0){particles.splice(i,1);continue;}
+    ctx.globalAlpha=p.life/60; ctx.fillStyle=p.color;
+    ctx.fillRect(p.x-p.size/2,p.y-p.size/2,p.size,p.size); ctx.globalAlpha=1;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  HUD
+// ═══════════════════════════════════════════════════════════
+function drawHUD() {
+  const sr=Math.min((otterSpeed-2.2)/(MAX_OTTER_SPD-2.2),1);
+  const meters=(seal.totalDist/80).toFixed(1);
+
+  rr(BASE_W/2-80,14,160,44,10,'rgba(0,20,40,0.65)');
+  ctx.strokeStyle='rgba(100,200,255,0.3)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.roundRect(BASE_W/2-80,14,160,44,10); ctx.stroke();
+  ctx.fillStyle=PAL.lightAqua; ctx.font='bold 11px "Courier New"'; ctx.textAlign='center';
+  ctx.fillText('🌊 METERS SWUM',BASE_W/2,30);
+  ctx.fillStyle=PAL.white; ctx.font='bold 20px "Courier New"'; ctx.fillText(meters+'m',BASE_W/2,50);
+
+  const slbl=sr<0.3?'💧 CALM':sr<0.6?'🌊 CHOPPY':'⚡ STORM';
+  ctx.fillStyle=sr<0.3?PAL.lightAqua:sr<0.6?PAL.yellow:PAL.red;
+  ctx.font='bold 10px "Courier New"'; ctx.textAlign='left'; ctx.fillText(slbl,12,30);
+  ctx.fillStyle='rgba(0,0,0,0.4)'; ctx.fillRect(12,34,60,8);
+  ctx.fillStyle=sr<0.3?PAL.aqua:sr<0.6?PAL.yellow:PAL.red; ctx.fillRect(12,34,60*sr,8);
+  ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1; ctx.strokeRect(12,34,60,8);
+
+  if (seal.invincible) {
+    const inv=seal.invTimer/seal.invDuration;
+    rr(BASE_W-100,14,88,44,10,'rgba(0,20,40,0.65)');
+    ctx.fillStyle=PAL.fishGold; ctx.font='bold 10px "Courier New"'; ctx.textAlign='center';
+    ctx.fillText('⭐ SHIELD',BASE_W-56,30);
+    ctx.fillStyle='rgba(0,0,0,0.4)'; ctx.fillRect(BASE_W-92,34,72,8);
+    ctx.fillStyle=PAL.fishGold; ctx.fillRect(BASE_W-92,34,72*inv,8);
+  }
+
+  // Boost cooldown indicator (desktop)
+  if (!isMobile && seal.boostCooldown>0) {
+    const bc=1-seal.boostCooldown/120;
+    ctx.strokeStyle=`rgba(180,100,255,${0.4+bc*0.4})`; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(BASE_W-28,BASE_H-60,18,-Math.PI/2,-Math.PI/2+Math.PI*2*bc); ctx.stroke();
+    ctx.fillStyle='rgba(180,100,255,0.7)'; ctx.font='16px serif'; ctx.textAlign='center';
+    ctx.fillText('⚡',BASE_W-28,BASE_H-55);
+  }
+
+  if (gameTime<180) {
+    const alpha=Math.max(0,1-gameTime/180);
+    ctx.globalAlpha=alpha;
+    rr(BASE_W/2-115,BASE_H-68,230,52,8,'rgba(0,20,40,0.7)');
+    ctx.fillStyle=PAL.lightAqua; ctx.font='10px "Courier New"'; ctx.textAlign='center';
+    ctx.fillText(isMobile?'D-Pad: swim  •  Tap/Boost btn = speed burst':'WASD/Arrows: swim  •  SPACE = speed burst',BASE_W/2,BASE_H-50);
+    ctx.fillText('Avoid otters  •  Move more = more meters!',BASE_W/2,BASE_H-34);
+    ctx.globalAlpha=1;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  MILESTONE
+// ═══════════════════════════════════════════════════════════
+let milestone=null, milestoneTimer=0;
+function checkMilestone() {
+  const m=seal.totalDist/80;
+  const ms=[[10,'🌊 Getting warmed up!'],[25,'🐠 Speedy seal!'],[50,'⚡ Ocean legend!'],[100,'🦭 UNSTOPPABLE!'],[200,'🌟 GOD OF THE SEA!']];
+  for (const [v,msg] of ms) {
+    if (m>=v && (!milestone||milestone.val<v) && milestoneTimer===0) {
+      milestone={val:v,msg}; milestoneTimer=150;
+    }
+  }
+}
+function drawMilestone() {
+  if (!milestone||milestoneTimer<=0) return;
+  const a=Math.min(milestoneTimer/30,1)*Math.min(milestoneTimer/150,1);
+  const y=BASE_H/2-80+(1-milestoneTimer/150)*-20;
+  ctx.globalAlpha=a; rr(BASE_W/2-130,y-22,260,38,10,'rgba(0,20,40,0.8)');
+  ctx.fillStyle=PAL.yellow; ctx.font='bold 16px "Courier New"'; ctx.textAlign='center';
+  ctx.fillText(milestone.msg,BASE_W/2,y); ctx.globalAlpha=1; milestoneTimer--;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  START SCREEN
+// ═══════════════════════════════════════════════════════════
+function drawStartScreen() {
+  const g=ctx.createLinearGradient(0,0,0,BASE_H);
+  g.addColorStop(0,'#071220'); g.addColorStop(1,'#0a1e38');
+  ctx.fillStyle=g; ctx.fillRect(0,0,BASE_W,BASE_H);
+  for (const b of bubbles) {
+    ctx.strokeStyle=`rgba(150,230,255,${Math.min(b.life/30,1)*0.5})`; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.stroke();
+  }
+  for (const cl of currentLines) {
+    cl.y+=1.5; if(cl.y>BASE_H+cl.len) cl.y=-cl.len;
+    ctx.strokeStyle=`rgba(100,200,240,${cl.alpha})`; ctx.lineWidth=cl.w;
+    ctx.beginPath(); ctx.moveTo(cl.x,cl.y); ctx.lineTo(cl.x,cl.y+cl.len); ctx.stroke();
+  }
+  const t=frameCount;
+  ctx.shadowColor=PAL.aqua; ctx.shadowBlur=20;
+  ctx.fillStyle=PAL.aqua; ctx.font='bold 13px "Courier New"'; ctx.textAlign='center';
+  ctx.fillText('🌊  WELCOME TO  🌊',BASE_W/2,120);
+  ctx.shadowBlur=30;
+  ctx.fillStyle=PAL.white; ctx.font='bold 52px "Courier New"'; ctx.fillText('FLAPPY',BASE_W/2,180);
+  ctx.fillStyle=PAL.lightAqua; ctx.font='bold 56px "Courier New"'; ctx.fillText('SEAL',BASE_W/2,240);
+  ctx.shadowBlur=0;
+  drawSeal(BASE_W/2, BASE_H/2-30+Math.sin(t*0.05)*8, t*0.1, false, false);
+  ctx.globalAlpha=0.25;
+  otterSilhouette(60,      BASE_H/2+80,'left');
+  otterSilhouette(BASE_W-60,BASE_H/2+80,'right');
+  ctx.globalAlpha=1;
+  ctx.fillStyle='rgba(100,200,240,0.85)'; ctx.font='11px "Courier New"'; ctx.textAlign='center';
+  ctx.fillText('A silly seal wants to explore the ocean...',BASE_W/2,BASE_H/2+60);
+  ctx.fillText("but the ANGRY OTTERS won't let it pass!",  BASE_W/2,BASE_H/2+78);
+  if (Math.floor(t/40)%2===0) {
+    ctx.fillStyle=PAL.yellow; ctx.font='bold 13px "Courier New"';
+    ctx.fillText(isMobile?'▶  TAP D-PAD TO DIVE IN  ◀':'▶  PRESS WASD OR SPACE TO DIVE IN  ◀',BASE_W/2,BASE_H-86);
+  }
+  ctx.fillStyle='rgba(100,200,240,0.4)'; ctx.font='10px "Courier New"';
+  ctx.fillText(isMobile?'D-Pad: swim  •  BOOST btn: burst  •  Move = meters!':'WASD/Arrows: swim  •  SPACE: burst  •  Move = meters!',BASE_W/2,BASE_H-62);
+  ctx.fillText('Catch the glowing fish for invincibility!',BASE_W/2,BASE_H-42);
+}
+function otterSilhouette(x,y,side) {
+  ctx.save(); ctx.translate(x,y); ctx.rotate(side==='left'?0.3:-0.3);
+  ctx.fillStyle=PAL.otterDark; ctx.fillRect(-30,-50,60,80); ctx.fillRect(-25,-70,50,28);
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  GAME OVER SCREEN
+// ═══════════════════════════════════════════════════════════
+function drawGameOverScreen() {
+  const t=frameCount;
+  const g=ctx.createLinearGradient(0,0,0,BASE_H);
+  g.addColorStop(0,'#1a0508'); g.addColorStop(1,'#080a18');
+  ctx.fillStyle=g; ctx.fillRect(0,0,BASE_W,BASE_H);
+  for (const cl of currentLines) {
+    cl.y+=2; if(cl.y>BASE_H+cl.len) cl.y=-cl.len;
+    ctx.strokeStyle='rgba(180,40,60,0.12)'; ctx.lineWidth=cl.w;
+    ctx.beginPath(); ctx.moveTo(cl.x,cl.y); ctx.lineTo(cl.x,cl.y+cl.len); ctx.stroke();
+  }
+  ctx.globalAlpha=0.35+Math.sin(t*0.04)*0.08;
+  ctx.save(); ctx.translate(BASE_W/2,160); ctx.scale(2.2,2.2);
+  otterSilhouette(0,0,'left'); ctx.restore(); ctx.globalAlpha=1;
+
+  ctx.shadowColor=PAL.red; ctx.shadowBlur=20;
+  ctx.fillStyle=PAL.red; ctx.font='bold 48px "Courier New"'; ctx.textAlign='center';
+  ctx.fillText('GAME',BASE_W/2,BASE_H/2-80); ctx.fillText('OVER',BASE_W/2,BASE_H/2-30);
+  ctx.shadowBlur=0;
+
+  ctx.save();
+  ctx.translate(BASE_W/2,BASE_H/2+30+Math.sin(t*0.08)*5);
+  ctx.rotate(Math.sin(t*0.04)*0.15);
+  drawSeal(0,0,0,false,true);
+  for (let s=0;s<3;s++) {
+    const a=t*0.04+s*Math.PI*2/3;
+    ctx.fillStyle=PAL.yellow; ctx.font='14px serif'; ctx.textAlign='center';
+    ctx.fillText('★',Math.cos(a)*40,Math.sin(a)*20-30);
+  }
+  ctx.restore();
+
+  const best=(bestScore/80).toFixed(1), cur=(score/80).toFixed(1);
+  rr(BASE_W/2-120,BASE_H/2+90,240,90,12,'rgba(0,10,20,0.75)');
+  ctx.strokeStyle='rgba(100,180,255,0.2)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.roundRect(BASE_W/2-120,BASE_H/2+90,240,90,12); ctx.stroke();
+  ctx.fillStyle=PAL.lightAqua; ctx.font='bold 12px "Courier New"'; ctx.textAlign='center';
+  ctx.fillText('METERS SWUM',BASE_W/2,BASE_H/2+112);
+  ctx.fillStyle=PAL.white; ctx.font='bold 28px "Courier New"'; ctx.fillText(cur+'m',BASE_W/2,BASE_H/2+140);
+  ctx.fillStyle=PAL.yellow; ctx.font='bold 11px "Courier New"'; ctx.fillText('BEST: '+best+'m',BASE_W/2,BASE_H/2+164);
+
+  const qs=['"HOW DARE YOU swim here!"','"This is OUR ocean!"','"Come back and face us!"','"You will NOT pass again!"'];
+  ctx.fillStyle='rgba(255,80,80,0.7)'; ctx.font='italic 11px "Courier New"';
+  ctx.fillText(qs[Math.floor(score/100)%qs.length],BASE_W/2,BASE_H-90);
+  if (Math.floor(t/40)%2===0) {
+    ctx.fillStyle=PAL.green; ctx.font='bold 14px "Courier New"';
+    ctx.fillText(isMobile?'▶  TAP SCREEN TO TRY AGAIN  ◀':'▶  PRESS R TO TRY AGAIN  ◀',BASE_W/2,BASE_H-55);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  COLLISION
+// ═══════════════════════════════════════════════════════════
+function checkCollision() {
+  if (seal.invincible) return false;
+  for (const o of otters) {
+    if (Math.hypot(seal.x-(o.x+o.w/2), seal.y-(o.y+o.h/2)) < 14+Math.min(o.w,o.h)*0.38)
+      return true;
+  }
+  return false;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  START / RESTART
+// ═══════════════════════════════════════════════════════════
+function startGame() {
+  state=STATE.PLAY;
+  Object.assign(seal,{x:BASE_W/2,y:BASE_H/2,vx:0,vy:0,totalDist:0,
+    prevX:BASE_W/2,prevY:BASE_H/2,dead:false,deathTimer:0,
+    invincible:false,invTimer:0,boostCooldown:0});
+  score=0; gameTime=0;
+  currentSpeed=1.8; otterSpeed=2.2; spawnInterval=180;
+  otters=[]; particles=[]; fish=null; fishTimer=0; spawnTimer=90;
+  milestone=null; milestoneTimer=0; boostActive=false;
+  initBG();
+}
+function restartGame() { startGame(); }
+
+// ═══════════════════════════════════════════════════════════
+//  UTILS
+// ═══════════════════════════════════════════════════════════
+function lerp(a,b,t) {
+  const ah=parseInt(a.slice(1),16), bh=parseInt(b.slice(1),16);
+  const ar=(ah>>16)&255,ag=(ah>>8)&255,ab=ah&255;
+  const br=(bh>>16)&255,bg=(bh>>8)&255,bb=bh&255;
+  return '#'+((Math.round(ar+(br-ar)*t)<<16)|(Math.round(ag+(bg-ag)*t)<<8)|Math.round(ab+(bb-ab)*t)).toString(16).padStart(6,'0');
+}
+
+// ═══════════════════════════════════════════════════════════
+//  AUDIO
+// ═══════════════════════════════════════════════════════════
+let audioCtx=null, bgGain=null, bgPlaying=false;
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  bgGain=audioCtx.createGain(); bgGain.gain.value=0.18; bgGain.connect(audioCtx.destination);
+  playBG();
+}
+function playBG() {
+  if (!audioCtx||bgPlaying) return; bgPlaying=true;
+  const notes=[261,293,329,349,392,440,392,349,329,293,261,293,329,392,440,493,440,392,349,329,392,440,493,523,493,440,392,349,329,261];
+  const beat=60/138; let time=audioCtx.currentTime+0.1;
+  function loop() {
+    for (let i=0;i<notes.length;i++) {
+      const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+      o.connect(g); g.connect(bgGain); o.type=i%4===0?'square':'sine'; o.frequency.value=notes[i];
+      g.gain.setValueAtTime(0,time+i*beat); g.gain.linearRampToValueAtTime(0.3,time+i*beat+0.02);
+      g.gain.exponentialRampToValueAtTime(0.001,time+i*beat+beat*0.8);
+      o.start(time+i*beat); o.stop(time+i*beat+beat);
+    }
+    const bass=[130,130,146,130,130,146,164,146];
+    for (let i=0;i<bass.length;i++) {
+      const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+      o.connect(g); g.connect(bgGain); o.type='triangle'; o.frequency.value=bass[i];
+      const bt=time+i*beat*(notes.length/bass.length);
+      g.gain.setValueAtTime(0,bt); g.gain.linearRampToValueAtTime(0.25,bt+0.05);
+      g.gain.exponentialRampToValueAtTime(0.001,bt+beat*1.5); o.start(bt); o.stop(bt+beat*2);
+    }
+    time+=notes.length*beat; setTimeout(loop,(notes.length*beat-1)*1000);
+  }
+  loop();
+}
+function sfx(type) {
+  if (!audioCtx) return;
+  const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+  o.connect(g); g.connect(audioCtx.destination); const t=audioCtx.currentTime;
+  if (type==='collect') { o.type='sine'; o.frequency.setValueAtTime(440,t); o.frequency.exponentialRampToValueAtTime(880,t+0.15); g.gain.setValueAtTime(0.3,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.3); o.start(t); o.stop(t+0.3); }
+  else if (type==='hit')    { o.type='sawtooth'; o.frequency.setValueAtTime(200,t); o.frequency.exponentialRampToValueAtTime(50,t+0.3); g.gain.setValueAtTime(0.4,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.4); o.start(t); o.stop(t+0.4); }
+  else if (type==='bubble') { o.type='sine'; o.frequency.setValueAtTime(600+Math.random()*200,t); o.frequency.exponentialRampToValueAtTime(200,t+0.1); g.gain.setValueAtTime(0.15,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.15); o.start(t); o.stop(t+0.15); }
+  else if (type==='boost')  { o.type='square'; o.frequency.setValueAtTime(300,t); o.frequency.exponentialRampToValueAtTime(600,t+0.08); g.gain.setValueAtTime(0.2,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.18); o.start(t); o.stop(t+0.18); }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  UPDATE
+// ═══════════════════════════════════════════════════════════
+function update() {
+  if (state!==STATE.PLAY) return;
+  frameCount++; gameTime++;
+
+  if (gameTime%600===0) {
+    currentSpeed=Math.min(currentSpeed+0.25,MAX_CURRENT);
+    otterSpeed  =Math.min(otterSpeed+0.3,   MAX_OTTER_SPD);
+    spawnInterval=Math.max(spawnInterval-8,  72);
+  }
+
+  // ── Movement physics ──────────────────────────────────────
+  // Horizontal: symmetric, no resistance asymmetry
+  // Vertical:   W resists current, S boosted by current
+  const accel    = 0.42;
+  const friction = 0.80;   // same for both axes — no hidden horizontal drag
+
+  if (keys.a) seal.vx -= accel;
+  if (keys.d) seal.vx += accel;
+  if (keys.w) seal.vy -= accel * 0.72;   // fighting current upward
+  if (keys.s) seal.vy += accel * 1.35;   // assisted by current downward
+
+  // Passive downward drift from current (vertical only)
+  seal.vy += currentSpeed * 0.055;
+
+  // Apply same friction to both axes — no extra horizontal resistance
+  seal.vx *= friction;
+  seal.vy *= friction;
+
+  // Clamp speeds — equal horizontal range
+  seal.vx = Math.max(-6, Math.min(6,   seal.vx));
+  seal.vy = Math.max(-5, Math.min(5.5, seal.vy));
+
+  // ── Boost ─────────────────────────────────────────────────
+  if (seal.boostCooldown>0) seal.boostCooldown--;
+  if (boostActive && seal.boostCooldown===0) {
+    // Burst in direction of travel; default upward if idle
+    const bx=seal.vx!==0?Math.sign(seal.vx):0;
+    const by=seal.vy!==0?Math.sign(seal.vy):-1;
+    seal.vx+=bx*4.5; seal.vy+=by*4.5;
+    seal.boostCooldown=120;
+    spawnParticles(seal.x,seal.y,PAL.purple,10);
+    sfx('boost'); boostActive=false;
+  }
+
+  seal.prevX=seal.x; seal.prevY=seal.y;
+  seal.x+=seal.vx; seal.y+=seal.vy;
+  seal.x=Math.max(26,Math.min(BASE_W-26,seal.x));
+  seal.y=Math.max(20,Math.min(BASE_H-20,seal.y));
+
+  const dx=seal.x-seal.prevX, dy=seal.y-seal.prevY;
+  const moved=Math.sqrt(dx*dx+dy*dy);
+  seal.totalDist+=moved; score=seal.totalDist;
+  if (score>bestScore) bestScore=score;
+
+  if (frameCount%8===0&&moved>0.5) { spawnBubble(seal.x-seal.vx*2,seal.y-seal.vy*2); if(frameCount%24===0) sfx('bubble'); }
+  seal.frameTimer++; if(seal.frameTimer>8){seal.frame=(seal.frame+1)%4;seal.frameTimer=0;}
+  if (seal.invincible){seal.invTimer--;if(seal.invTimer<=0)seal.invincible=false;}
+
+  spawnTimer--; if(spawnTimer<=0){spawnOtterPair();spawnTimer=spawnInterval;}
+
+  for (let i=otters.length-1;i>=0;i--) {
+    const o=otters[i];
+    o.y+=o.speed; o.jawTimer+=0.08; o.jawOpen=(Math.sin(o.jawTimer)+1)/2; o.pawPhase+=0.06;
+    const tilt=o.side==='left'?Math.PI*0.22:-Math.PI*0.22;
+    const rel=Math.atan2(seal.y-(o.y+o.h/2-o.h*0.35), seal.x-(o.x+o.w/2))-tilt-Math.PI/2;
+    o.headAngle+=(Math.max(-0.6,Math.min(0.6,rel))-o.headAngle)*0.08;
+    if(o.y>BASE_H+o.h+20) otters.splice(i,1);
+  }
+
+  fishTimer++;
+  if (!fish&&fishTimer>=FISH_SPAWN_FRAMES) { fish={x:60+Math.random()*(BASE_W-120),y:80+Math.random()*(BASE_H-160)}; fishTimer=0; }
+  if (fish) {
+    fish.y+=currentSpeed*0.3; if(fish.y>BASE_H-40) fish.y=80;
+    if (Math.hypot(seal.x-fish.x,seal.y-fish.y)<28) {
+      seal.invincible=true; seal.invTimer=seal.invDuration;
+      spawnParticles(fish.x,fish.y,PAL.fishGold,14); sfx('collect'); fish=null;
+    }
+  }
+
+  if (checkCollision()) { seal.dead=true; state=STATE.DEAD; sfx('hit'); spawnParticles(seal.x,seal.y,PAL.red,16); spawnBubble(seal.x,seal.y); }
+  checkMilestone();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  DRAW
+// ═══════════════════════════════════════════════════════════
+function draw() {
+  ctx.clearRect(0,0,BASE_W,BASE_H);
+  if (state===STATE.START) {
+    if(frameCount%30===0) spawnBubble(Math.random()*BASE_W,BASE_H);
+    updateBubbles(); drawStartScreen(); frameCount++; return;
+  }
+  if (state===STATE.DEAD) { updateParticles(); drawGameOverScreen(); frameCount++; return; }
+
+  drawBackground();
+  for (const o of otters) drawOtter(o);
+  if (fish) drawFish(fish);
+  drawSeal(seal.x,seal.y,seal.frame,seal.invincible,false);
+
+  if (seal.invincible) {
+    for (const o of otters) {
+      if (Math.hypot(seal.x-(o.x+o.w/2),seal.y-(o.y+o.h/2))<80 && Math.floor(frameCount/6)%2===0) {
+        ctx.globalAlpha=0.35; ctx.fillStyle=PAL.red;
+        ctx.beginPath(); ctx.arc(o.x+o.w/2,o.y+o.h/2,35,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+      }
+    }
+  }
+  updateBubbles(); updateParticles(); drawHUD(); drawMilestone();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  LOOP
+// ═══════════════════════════════════════════════════════════
+function loop(ts) {
+  const dt=Math.min((ts-lastTime)/16.67,3); lastTime=ts;
+  update(); draw(); requestAnimationFrame(loop);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  BOOT
+// ═══════════════════════════════════════════════════════════
+initBG();
+for (let i=0;i<20;i++) bubbles.push({
+  x:Math.random()*BASE_W, y:Math.random()*BASE_H,
+  r:2+Math.random()*5, vy:-(0.5+Math.random()*1.5),
+  vx:(Math.random()-0.5)*0.5, life:60+Math.random()*120,
+});
+window.addEventListener('keydown', ()=>initAudio(), {once:true});
+window.addEventListener('click',   ()=>initAudio(), {once:true});
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
